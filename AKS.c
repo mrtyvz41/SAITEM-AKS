@@ -12,13 +12,7 @@
 #include <stdlib.h>
 #include "stdint.h"
 #include <string.h>
-/*
-char TextBoxIsimler_Syf2 [] = {"h0=","h1=","h2=","h3=","h4=","h5=","h6=","h7=","h8=","h9=","h10=","h11=","h12=","h13=","h14=","h15=","h16=","h17=","h18=","h19="
-       "h20=","h21=","h22=","h23=","h24=","h25=","h26=","h27=","h28=","h29=","h30=","h31="
-       };
 
-
-*/
  //* Silecek Tanımlamalari *//
   unsigned int current_duty, pwm_period1, oran;
 /*********************************************/
@@ -30,11 +24,23 @@ char TextBoxIsimler_Syf2 [] = {"h0=","h1=","h2=","h3=","h4=","h5=","h6=","h7=","
   int FAR_durum = 0;
 /*************************/
 
+//* HIZ Degiskenleri TANIMLA *//
+int HALL_durum = 0;
+unsigned long EskiZaman; 
+const float Yaricap = 0.15; //metre
+const float PI = 3.14;
+float Cevre;
+float Sure;
+float ToplamYol=0;
+
+/*************************/
+
+//*  *//
+
 /* UART'DAN BASILACAK VERILER*/
-  unsigned int HIZ = 15,SICAKLIK = 61;
-  float BATARYA_GERILIMI = -1;
+  unsigned int SICAKLIK = 61, AKIM=11, GERILIM=86;
+  float HIZ = 0;
   float HUCRE_GERILIMLERI[32];
-  unsigned char DENEME[20];
            /*Nextion Text Box*/
 
   char SicaklikTxtBox [] = "Sicaklik.val=";
@@ -51,7 +57,23 @@ char TextBoxIsimler_Syf2 [] = {"h0=","h1=","h2=","h3=","h4=","h5=","h6=","h7=","
 #define OFF 0
 #define LOW 0
 #define HIGH 1
+#define Read 0
+#define Write 1
 
+  /* XBEE CONFIG */
+
+#define START_DELIMITER 0x7E
+#define FRAME_TYPE 0x90
+#define SOURCE_ADDRESS_64_H 0x0013A200
+#define SOURCE_ADDRESS_64_L 0x410AC893
+#define SOURCE_ADDRESS_16 0x9D4D
+#define RECEIVER_OPTIONS 0x01
+
+uint16_t CheckSum = 0xCE;
+
+
+
+  /********************/
       /**PIN TANIMLAMALARI**/
 //sbit BUZZER at LATF3_bit;
 //sbit BUZZER_Direction at TRISF3_bit;
@@ -92,6 +114,8 @@ sbit FAR_Direction at TRISE4_bit;
 sbit SILECEK_PWM at RD0_bit;
 sbit SILECEK_PWM_Direction at TRISD0_bit;
 
+sbit HALL_SENSOR at RE0_bit;
+sbit HALL_SENSOR_Direction at TRISE0_bit;
 
 void test_acilma(){
 
@@ -125,6 +149,7 @@ void pin_tanimlama(){
   KORNA_Direction = INPUT;
   SILECEK_Direction = INPUT;
   FAR_Direction = INPUT;
+  HALL_SENSOR_Direction = INPUT;
 }
 void silecek_atamalari(){
   current_duty  = 54;
@@ -161,22 +186,28 @@ void Silecek_Durdur(){
     }
   }
 }
-void Uart_Tanimlama(){
+
+void Uart4_Tanimlama(){
   UART4_Init(9600);
   Delay_ms(100);
 }
-
+void Uart3_Tanimlama(){
+  UART3_Init(9600);
+  Delay_ms(100);
+}
 void ondalikAyir(int veri, int *Basamaklar){
 	Basamaklar[0] = veri/100;
 	Basamaklar[1] = veri/10;
 	Basamaklar[2] = veri - (100*Basamaklar[0] + 10*Basamaklar[1]);
 }
+
 void ChrDonustur(int veri, char *sayiDizi){
 	int i;
 	int basamaklar[3];
 	ondalikAyir(veri, basamaklar);
 	for (i = 0; i < 3; i++)	sayiDizi[i] = basamaklar[i] + '0';
 }
+
 void ChrBirlestir(char *dizi_1, char *dizi_2, int dizi_1_u, int dizi_2_u, char *Sonuc){
 	int i, k;
 	//printf(" dizi 1 uzunluk :%d\n", dizi_1_u);
@@ -212,73 +243,130 @@ void Hiz_Yaz(){
   UART4_Write(0xFF);
 }
 void Akim_Yaz(){
+  char AkimVeriDizi [3];
+  char Sonuc[20];
+  ChrDonustur(AKIM,AkimVeriDizi);
+  ChrBirlestir(AkimTxtBox,AkimVeriDizi,sizeof(AkimTxtBox)-1,sizeof(AkimVeriDizi)-1,Sonuc);
+  UART4_Write_Text(Sonuc);
+  UART4_Write(0xFF);
+  UART4_Write(0xFF);
+  UART4_Write(0xFF);
 
 }
 void Gerilim_Yaz(){
+  char GerilimVeriDizi [3];
+  char Sonuc[20];
+  ChrDonustur(GERILIM,GerilimVeriDizi);
+  ChrBirlestir(GerilimTxtBox,GerilimVeriDizi,sizeof(GerilimTxtBox)-1,sizeof(GerilimVeriDizi)-1,Sonuc);
+  UART4_Write_Text(Sonuc);
+  UART4_Write(0xFF);
+  UART4_Write(0xFF);
+  UART4_Write(0xFF);
 
 }
 void Ekran_Veri_Yaz(){
-     Sicakik_Yaz();
+     //Sicakik_Yaz();
+     Hiz_Yaz();
+     //Akim_Yaz();
+     //Gerilim_Yaz();
 }
-//Timer1
-//Prescaler 1:256; PR1 Preload = 62500; Actual Interrupt Time = 2 s
+void XbeeVeriGonder(){
+ 
+UART3_Write_Text("merhaba");
 
-//Place/Copy this part in declaration section
+}
+void HALL_TEST(){
+  if (HALL_SENSOR == HIGH)
+  {
+    BUZZER = ON;
+    Delay_ms(1000);
+    BUZZER = OFF;
+  }
+}
+unsigned long millis_sayac=0;
 void InitTimer1(){
-  T1CON         = 0x8030;
-  T1IP0_bit         = 1;
-  T1IP1_bit         = 1;
-  T1IP2_bit         = 1;
-  T1IF_bit         = 0;
-  T1IE_bit         = 1;
-  PR1                 = 62500;
-  TMR1                 = 0;
+  T1CON	 = 0x8000;
+  T1IP0_bit	 = 1;
+  T1IP1_bit	 = 1;
+  T1IP2_bit	 = 1;
+  T1IF_bit	 = 0;
+  T1IE_bit	 = 1;
+  PR1		 = 8000;
+  TMR1		 = 0;
+}
+ 
+void Timer1Interrupt() iv IVT_TIMER_1 ilevel 7 ics ICS_SRS {
+  T1IF_bit	 = 0;
+  //Enter your code here 
+  millis_sayac++;
 }
 
-void Timer1Interrupt() iv IVT_TIMER_1 ilevel 7 ics ICS_SRS {
-  T1IF_bit         = 0;
-  //Enter your code here
-   //Uart_Veri_Yaz();
+unsigned long millis()
+{
+  return(millis_sayac); 
 }
+void Cevre_Hesapla(){
+  Cevre=2*PI*Yaricap;
+}
+void Hiz_Hesapla(){
+  
+  if (HALL_SENSOR == 1 && HALL_durum == 0){
+  EskiZaman = millis();
+  HALL_durum = 1;
+  }
+  else if (HALL_SENSOR == 1 && HALL_durum == 1 && millis() - EskiZaman > 10){    
+    Sure= (millis() - EskiZaman)/1000.f;
+    HIZ = (Cevre/Sure) * 3.6;      
+    HALL_durum = 0;
+    DEBUG_LED1 = ON;
+  }
+  else if (HALL_SENSOR == 0 && millis() - EskiZaman > 2000)
+  {
+    HIZ = 0;
+  }
+}
+void ilkKonfig(){
+
+  UART3_Write(0x7E);
+  UART3_Write(0x00);
+  UART3_Write(0x04);
+  
+  UART3_Write(0x08);
+  UART3_Write(0x01);
+  UART3_Write(0x41);
+  
+  UART3_Write(0x50);
+  UART3_Write(0x65);
+}
+
+
 
 void main(){
 
   pin_tanimlama();
   test_acilma();
   silecek_atamalari();
-  Uart_Tanimlama();
+  Uart4_Tanimlama(); // EKRAN
+  Uart3_Tanimlama(); // XBEE
+  ilkKonfig();
   InitTimer1();
   EnableInterrupts();  
+  Cevre_Hesapla();
+  //UART3_Write_Text("merhaba");
   while(1){
 
+     Hiz_Hesapla();
      Ekran_Veri_Yaz();
+     XbeeVeriGonder();
+     //HALL_TEST();
 
                   /*KORNA*/
     if(KORNA == ON){
       KORNA_durum = 1;
-
-      BUZZER = ON;
-      DEBUG_LED1 = ON;
       KORNA_CIKIS = ON;
-      Delay_ms(2000);
-      BUZZER = OFF;
     }
-    else if (KORNA == OFF && KORNA_durum){    
-          Delay_ms(50);
-      BUZZER = ON;
-      DEBUG_LED1 = ON;
-      Delay_ms(500);
-      BUZZER = OFF;
-      DEBUG_LED1 = OFF;
-      Delay_ms(100);
-      BUZZER = ON;
-      DEBUG_LED1 = ON;
-      Delay_ms(500);
-      BUZZER = OFF;
-      DEBUG_LED1 = OFF;
-      ///
+    else if (KORNA == OFF && KORNA_durum){             
       KORNA_CIKIS = OFF;
-      ///
       KORNA_durum = 0;
     }
                   /*SILECEK*/
@@ -296,28 +384,9 @@ void main(){
                   /*FAR*/         
     if(FAR == ON){
       FAR_durum = 1;
-
-      Delay_ms(50);
-      BUZZER = ON;
-      DEBUG_LED3 = ON;
       FAR_CIKIS = ON;
-      Delay_ms(2000);
-      BUZZER = OFF;
       }
     else if(FAR == OFF && FAR_durum){
-
-      Delay_ms(50);
-      BUZZER = ON;
-      DEBUG_LED3 = ON;
-      Delay_ms(500);
-      BUZZER = OFF;
-      DEBUG_LED3 = OFF;
-      Delay_ms(100);
-      BUZZER = ON;
-      DEBUG_LED3 = ON;
-      Delay_ms(500);
-      BUZZER = OFF;
-      DEBUG_LED3 = OFF;
       ///
       FAR_CIKIS = OFF;
       ///
@@ -326,6 +395,5 @@ void main(){
 
   }
 
-
-
 }
+
